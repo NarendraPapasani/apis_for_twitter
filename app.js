@@ -108,11 +108,19 @@ const camelCase = obj => {
 app.get('/user/tweets/feed/', authenticateToken, async (req, resp) => {
   const {username} = req
   const query = `
-   SELECT *
-    FROM tweet
-  JOIN follower ON tweet.user_id = follower.following_user_id
-  JOIN user ON tweet.user_id = user.user_id
-  WHERE user.username = '${username}';
+   SELECT
+        user.username, tweet.tweet, tweet.date_time AS dateTime
+        FROM
+        follower
+        INNER JOIN tweet
+        ON follower.following_user_id = tweet.user_id
+        INNER JOIN user
+        ON tweet.user_id = user.user_id
+        WHERE
+        follower.follower_user_id = ${username}
+        ORDER BY
+        tweet.date_time DESC
+        LIMIT 4;
   `
   const result1 = await db.all(query)
   console.log(result1)
@@ -199,7 +207,7 @@ app.get('/tweets/:tweetId/', authenticateToken, async (req, res) => {
 
 app.get('/tweets/:tweetId/likes/', authenticateToken, async (req, res) => {
   const {tweetId} = req.params
-  const {username} = req.username // Assuming 'req.user' is set after authentication
+  const {username} = req // Assuming 'req.user' is set after authentication
 
   // SQL query to check if 'username' follows the author of the tweet
   const checkFollowingQuery = `
@@ -210,7 +218,7 @@ app.get('/tweets/:tweetId/likes/', authenticateToken, async (req, res) => {
       JOIN tweet ON follower.following_user_id = tweet.user_id
     WHERE 
       tweet.tweet_id = ? AND 
-      follower.follower_username = ?;
+      follower.follower_user_id = (SELECT user_id FROM user WHERE username = ?);
   `
 
   try {
@@ -225,10 +233,10 @@ app.get('/tweets/:tweetId/likes/', authenticateToken, async (req, res) => {
       SELECT 
         user.username 
       FROM 
-        likes 
-        JOIN user ON likes.user_id = user.user_id
+        like 
+        JOIN user ON like.user_id = user.user_id
       WHERE 
-        likes.tweet_id = ?;
+        like.tweet_id = ?;
     `
 
     const likesResult = await db.all(getLikesQuery, [tweetId])
@@ -236,34 +244,34 @@ app.get('/tweets/:tweetId/likes/', authenticateToken, async (req, res) => {
 
     res.json({likes})
   } catch (error) {
-    res.status(500).send(error)
+    res.status(500).send(error.message)
   }
 })
 
 app.get('/tweets/:tweetId/replies/', authenticateToken, async (req, res) => {
-  const {tweetId} = req.params
-  const {username} = req // Assuming 'req.user' is set after authentication
-
-  // SQL query to check if 'username' follows the author of the tweet
-  const checkFollowingQuery = `
-    SELECT 
-      * 
-    FROM 
-      follower 
-      JOIN tweet ON follower.following_user_id = tweet.user_id
-    WHERE 
-      tweet.tweet_id = ? AND 
-      follower.follower_username = ?;
-  `
-
   try {
+    const {tweetId} = req.params
+    const {username} = req // Assuming 'req.user' is set after authentication
+
+    // Check if 'username' follows the author of the tweet
+    const checkFollowingQuery = `
+      SELECT 
+        * 
+      FROM 
+        follower 
+        JOIN tweet ON follower.following_user_id = tweet.user_id
+      WHERE 
+        tweet.tweet_id = ? AND 
+        follower.follower_user_id = (SELECT user_id FROM user WHERE username = ?);
+    `
+
     const isFollowing = await db.get(checkFollowingQuery, [tweetId, username])
 
     if (!isFollowing) {
       return res.status(401).send('Invalid Request')
     }
 
-    // SQL query to get the tweet
+    // Get the tweet
     const getTweetQuery = `
       SELECT 
         tweet.tweet,
@@ -272,17 +280,16 @@ app.get('/tweets/:tweetId/replies/', authenticateToken, async (req, res) => {
         tweet
         JOIN user ON tweet.user_id = user.user_id
       WHERE 
-        tweet.tweet_id = ${tweetId};
+        tweet.tweet_id = ?;
     `
 
     const tweetResult = await db.get(getTweetQuery, [tweetId])
 
-    // Check if tweet exists
     if (!tweetResult) {
       return res.status(404).send('Tweet not found')
     }
 
-    // SQL query to get replies if 'username' follows the author of the tweet
+    // Get replies if 'username' follows the author of the tweet
     const getRepliesQuery = `
       SELECT 
         user.name,
@@ -291,7 +298,7 @@ app.get('/tweets/:tweetId/replies/', authenticateToken, async (req, res) => {
         reply 
         JOIN user ON reply.user_id = user.user_id
       WHERE 
-        reply.tweet_id = ${tweetId};
+        reply.tweet_id = ?;
     `
 
     const repliesResult = await db.all(getRepliesQuery, [tweetId])
